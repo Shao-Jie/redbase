@@ -1,9 +1,7 @@
 //
 // File:        rm_testshell.cc
 // Description: Test RM component
-// Authors:     Jan Jannink
-//              Dallan Quass (quass@cs.stanford.edu)
-//              Jason McHugh (mchughj@cs.stanford.edu)
+// Authors:     Yifei Huang (yifei@stanford.edu)
 //
 // This test shell contains a number of functions that will be useful
 // in testing your RM component code.  In addition, a couple of sample
@@ -13,18 +11,19 @@
 // 1997:  Tester has been modified to reflect the change in the 1997
 // interface.  For example, FileHandle no longer supports a Scan over the
 // relation.  All scans are done via a FileScan.
-//
 
 #include <cstdio>
 #include <iostream>
 #include <cstring>
 #include <unistd.h>
 #include <cstdlib>
+#include <vector>
 
 #include "redbase.h"
 #include "pf.h"
 #include "rm_internal.h"
 #include "rm.h"
+#include <ctime>
 
 using namespace std;
 
@@ -35,7 +34,7 @@ using namespace std;
 #define STRLEN      29               // length of string in testrec
 #define PROG_UNIT   50               // how frequently to give progress
                                       //   reports when adding lots of recs
-#define FEW_RECS   20                // number of records added in
+#define FEW_RECS   400                // number of records added in
 
 //
 // Computes the offset of a field in a record (should be in <stddef.h>)
@@ -56,9 +55,16 @@ struct TestRec {
 //
 // Global PF_Manager and RM_Manager variables
 //
+#define MAXRECS 10000
 PF_Manager pfm;
 RM_Manager rmm(pfm);
-
+//vector<int> deleted_indices;
+//vector<int> inserted_indeces;
+int inserted_indices[MAXRECS];
+int deleted_indices[MAXRECS];
+RM_Record added_recs[MAXRECS];
+int recsInFile;
+int maxIndex;
 
 //
 // Function declarations
@@ -66,7 +72,6 @@ RM_Manager rmm(pfm);
 RC Test1(void);
 RC Test2(void);
 RC Test3(void);
-RC Test4(void);
 
 void PrintError(RC rc);
 void LsFile(char *fileName);
@@ -87,13 +92,12 @@ RC GetNextRecScan(RM_FileScan &fs, RM_Record &rec);
 //
 // Array of pointers to the test functions
 //
-#define NUM_TESTS       4               // number of tests
+#define NUM_TESTS       3               // number of tests
 int (*tests[])() =                      // RC doesn't work on some compilers
 {
     Test1,
     Test2,
-    Test3,
-    Test4
+    Test3
 };
 
 //
@@ -250,6 +254,181 @@ RC AddRecs(RM_FileHandle &fh, int numRecs)
     return (0);
 }
 
+
+RC RIDToIndex(RID &rid, int &index){
+    RC rc;
+    PageNum page;
+    SlotNum slot;
+    if((rc = rid.GetPageNum(page)))
+        return (rc);
+    if((rc = rid.GetSlotNum(slot)))
+        return (rc);
+
+    index = (page-1)*(PF_PAGE_SIZE/sizeof(TestRec)) + slot;
+
+}
+
+
+//
+// Add random records, and keep track of them 
+//
+RC AddRandRecs(RM_FileHandle &fh, int numRecs)
+{
+    RC      rc;
+    int     i;
+    TestRec recBuf;
+    RID     rid;
+    PageNum pageNum;
+    SlotNum slotNum;
+    
+    // We set all of the TestRec to be 0 initially.  This heads off
+    // warnings that Purify will give regarding UMR since sizeof(TestRec)
+    // is 40, whereas actual size is 37.
+    memset((void *)&recBuf, 0, sizeof(recBuf));
+
+    //printf("\nadding %d records\n", numRecs);
+    for (i = 0; i < numRecs; i++) {
+        memset(recBuf.str, ' ', STRLEN);
+        sprintf(recBuf.str, "a%d", i);
+        recBuf.num = i;
+        recBuf.r = (float)i;
+        if ((rc = InsertRec(fh, (char *)&recBuf, rid)) ||
+            (rc = rid.GetPageNum(pageNum)) ||
+            (rc = rid.GetSlotNum(slotNum)))
+            return (rc);
+        int index = -1;
+        if((rc == RIDToIndex(rid, index)))
+            return (rc);
+        //printf("index added: %d \n", index);
+        inserted_indices[index] = 1;
+        deleted_indices[index] = 0;
+
+        if((rc = added_recs[index].SetRecord(rid, (char*)&recBuf, sizeof(TestRec))))
+            return (rc);
+        recsInFile++;
+        if(index > maxIndex)
+            maxIndex = index;
+        /*
+        if ((i + 1) % PROG_UNIT == 0){
+            printf("%d  ", i + 1);
+            fflush(stdout);
+        }
+        */
+    }
+    /*
+    if (i % PROG_UNIT != 0)
+        printf("%d\n", i);
+    else
+        putchar('\n');
+        */
+
+    // Return ok
+    return (0);
+}
+
+RC DeleteRandRecs(RM_FileHandle &fh, int numRecs){
+    RC rc;
+    if(numRecs > recsInFile)
+        return (RM_EOF);
+    for(int i=0; i < numRecs; i++){
+        //printf("recs in file: %d \n", recsInFile);
+        int indextodelete = (rand() % recsInFile );
+        //printf("indextodelete: %d \n", indextodelete);
+        //printf("index: %d \n", i);
+        int count = 0;
+        int index = -1;
+        while(count <= (indextodelete)){
+            index++;
+            //printf("index: %d, count: %d \n", index, count);
+            if(inserted_indices[index] == 1)
+                count++;
+        }
+        //printf("found index: %d \n", index);
+        RID rid;
+        if((rc = added_recs[index].GetRid(rid))){
+            return (rc);
+        }
+        if((rc = fh.DeleteRec(rid)))
+            return (rc);
+        inserted_indices[index] = 0;
+        deleted_indices[index] = 1;
+        recsInFile--;
+    }
+
+}
+
+RC VerifyRandFile(RM_FileHandle &fh){
+    RC rc;
+    RM_FileScan fs;
+    RID rid;
+    RM_Record rec;
+    // Count that there are recsInFile number of records:
+    int counter = 0;
+    //printf("num records: %d\n", recsInFile);
+
+   if ((rc=fs.OpenScan(fh,INT,sizeof(int),offsetof(TestRec, num), 
+         NO_OP, NULL)))
+      return (rc);
+   // count them
+   for (rc = GetNextRecScan(fs, rec); 
+         rc != (RM_EOF); 
+         rc = GetNextRecScan(fs, rec), counter++) {
+
+      // Get the record id
+      //if ((rc = rec.GetRid(rid)))
+      //   return (rc);
+   }
+   //printf("counterbefore: %d \n", counter);
+   //printf("counter %d \n", counter);
+   if ((rc = fs.CloseScan()))
+      return(rc);
+   if(counter != recsInFile)
+   //printf("counter: %d \n", counter);
+      return (RM_EOF);
+
+
+   // Make sure that all the records deleted are not there:
+   for(int i = 0; i < maxIndex; i++){
+     if (deleted_indices[i] == 1){
+        RID rid;
+        RM_Record rec;
+        if((rc = added_recs[i].GetRid(rid))){
+            return (rc);
+        }
+        if((fh.GetRec(rid, rec)) == 0)
+            return (RM_EOF);
+     }
+   }
+
+   // Make sure that all the records inserted are there. 
+   for(int i = 0; i < maxIndex; i++){
+     if (inserted_indices[i] == 1){
+        RID rid;
+        RM_Record rec;
+        if((rc = added_recs[i].GetRid(rid))){
+            return (rc);
+        }
+        if((rc =(fh.GetRec(rid, rec))))
+            return (rc);
+        TestRec *data1;
+        TestRec *data2;
+        if((rc = rec.GetData((char*&)data1)))
+            return (rc);
+        if((rc = added_recs[i].GetData((char*&)data2)))
+            return (rc);
+        if (strcmp(data1->str,data2->str))
+          return (-1);
+        if (data1->num != data2->num)
+          return (-1);
+        if (data1->r != data2->r)
+          return (-1);
+     }
+   }
+
+
+   return (0);
+}
+
 //
 // VerifyFile
 //
@@ -365,6 +544,15 @@ RC PrintFile(RM_FileScan &fs)
     return (0);
 }
 
+/*
+RC DeleteRandomRecs(RM_FileHandle &fh, int numRecords){
+    for(int i = 0; i < numRecords; i++){
+        srand(time(NULL));
+        int 
+    }
+
+}
+*/
 ////////////////////////////////////////////////////////////////////////
 // The following functions are wrappers for some of the RM component  //
 // methods.  They give you an opportunity to add debugging statements //
@@ -456,67 +644,8 @@ RC GetNextRecScan(RM_FileScan &fs, RM_Record &rec)
     return (fs.GetNextRec(rec));
 }
 
-/////////////////////////////////////////////////////////////////////
-// Sample test functions follow.                                   //
-/////////////////////////////////////////////////////////////////////
 
-//
-// Test1 tests simple creation, opening, closing, and deletion of files
-//
-RC Test1(void)
-{
-    RC            rc;
-    RM_FileHandle fh;
-
-    printf("test1 starting ****************\n");
-
-    if ((rc = CreateFile(FILENAME, sizeof(TestRec))) ||
-        (rc = OpenFile(FILENAME, fh)) ||
-        (rc = CloseFile(FILENAME, fh)))
-        return (rc);
-
-    LsFile(FILENAME);
-
-    if ((rc = DestroyFile(FILENAME)))
-        return (rc);
-
-    printf("\ntest1 done ********************\n");
-    return (0);
-}
-
-//
-// Test2 tests adding a few records to a file.
-//
-RC Test2(void)
-{
-    RC            rc;
-    RM_FileHandle fh;
-
-    printf("test2 starting ****************\n");
-
-    if ((rc = CreateFile(FILENAME, sizeof(TestRec))) ||
-        (rc = OpenFile(FILENAME, fh)) ||
-        (rc = AddRecs(fh, FEW_RECS)))
-        return (rc);
-
-
-    if(VerifyFile(fh, FEW_RECS))
-        return (rc);
-
-    if ((rc = CloseFile(FILENAME, fh)))
-        return (rc);
-
-    LsFile(FILENAME);
-
-    if ((rc = DestroyFile(FILENAME)))
-        return (rc);
-
-    printf("\ntest2 done ********************\n");
-    return (0);
-}
-
-
-RC Test3(void){
+RC Test1(void){
    RC rc;
    RM_FileHandle fh1;
    RM_FileHandle fh2;
@@ -572,7 +701,7 @@ RC Test3(void){
    return (0);
 }
 
-RC Test4(void){
+RC Test2(void){
     RC rc;
     RM_FileHandle fh;
     RM_FileHandle fh2;
@@ -639,5 +768,96 @@ RC Test4(void){
 
     return (0);
 
+}
+
+// Tests random insertion and deletion
+RC Test3(void){
+    srand (time(NULL));
+    RC rc = 0;
+    RM_FileHandle fh;
+    //RM_FileHandle fh2;
+    RM_Record rec;
+    RID rid;
+    recsInFile = 0;
+    maxIndex = 0;
+    int numCycles = 100;
+
+    printf("\n*** File Creation Test: %s\n", 
+         (CreateFile(FILENAME, sizeof(TestRec))) ? "FAIL\a" : "PASS");
+    printf("\n*** File Open Test: %s\n", 
+         (OpenFile(FILENAME, fh)) ? "FAIL\a" : "PASS");
+    
+
+    printf("\n*** Add 400 Records Test: %s\n", 
+         (AddRandRecs(fh, 400)) ? "FAIL\a" : "PASS");
+
+    printf("\n*** Deleting 100 Records Test: %s\n", 
+         (DeleteRandRecs(fh, 100)) ? "FAIL\a" : "PASS");
+
+    printf("\n*** Verifying file: %s\n", 
+         (VerifyRandFile(fh)) ? "FAIL\a" : "PASS");
+
+
+    int prevMaxIndex = maxIndex;
+    if((rc = AddRandRecs(fh, 100)))
+        return (rc);
+    printf("\n*** Adding 100 Random Records\n*** Check for reusage: \n%s\n", 
+         (prevMaxIndex = maxIndex) ? "PASS\a" : "FAIL");
+
+    // OK
+
+    if((rc = AddRandRecs(fh, 4000)))
+        return (rc);
+    if((rc = DeleteRandRecs(fh, 1000)))
+        return (rc);
+    printf("\n*** Adding 4000\n*** Deleting 1000 Random Records\n*** Verifying File: \n%s\n", 
+         (VerifyRandFile(fh)) ? "FAIL\a" : "PASS");
+
+
+    if((rc = AddRandRecs(fh, 1000)))
+         return (rc);
+    prevMaxIndex = maxIndex;
+    printf("\n*** Adding/Deleting 1000 Random Records for %d Cycles: ", numCycles);
+    for(int i= 0; i < numCycles; i++){
+
+       if((rc = DeleteRandRecs(fh, 1000)))
+          return (rc);
+       if((rc = VerifyRandFile(fh)))
+          return (rc);
+       if((rc = AddRandRecs(fh, 1000)))
+         return (rc);
+       if((rc = VerifyRandFile(fh)))
+          return (rc);
+     }
+     printf("\n*** Check that no new pages were added: \n%s\n",
+        (prevMaxIndex == maxIndex) ? "PASS\a" : "FAIL");
+
+
+    prevMaxIndex = maxIndex;
+    printf("\n*** Adding/Deleting 1 Random Record for %d Cycles: ", numCycles);
+    for(int i= 0; i < numCycles; i++){
+
+       if((rc = DeleteRandRecs(fh, 1)))
+          return (rc);
+       if((rc = VerifyRandFile(fh)))
+          return (rc);
+       if((rc = AddRandRecs(fh, 1)))
+         return (rc);
+       if((rc = VerifyRandFile(fh)))
+          return (rc);
+     }
+     printf("\n%s\n",
+        (rc == 0) ? "PASS\a" : "FAIL");
+
+
+     // delete all the records:
+
+
+    if ((rc = CloseFile(FILENAME, fh)) ||
+       (rc = DestroyFile(FILENAME)))
+     return (rc);
+
+
+    return (0);
 }
 

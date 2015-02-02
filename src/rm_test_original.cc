@@ -23,7 +23,6 @@
 
 #include "redbase.h"
 #include "pf.h"
-#include "rm_internal.h"
 #include "rm.h"
 
 using namespace std;
@@ -59,14 +58,11 @@ struct TestRec {
 PF_Manager pfm;
 RM_Manager rmm(pfm);
 
-
 //
 // Function declarations
 //
 RC Test1(void);
 RC Test2(void);
-RC Test3(void);
-RC Test4(void);
 
 void PrintError(RC rc);
 void LsFile(char *fileName);
@@ -87,13 +83,11 @@ RC GetNextRecScan(RM_FileScan &fs, RM_Record &rec);
 //
 // Array of pointers to the test functions
 //
-#define NUM_TESTS       4               // number of tests
+#define NUM_TESTS       2               // number of tests
 int (*tests[])() =                      // RC doesn't work on some compilers
 {
     Test1,
-    Test2,
-    Test3,
-    Test4
+    Test2
 };
 
 //
@@ -111,11 +105,8 @@ int main(int argc, char *argv[])
     cout << "Starting RM component test.\n";
     cout.flush();
 
-
     // Delete files from last time
     unlink(FILENAME);
-
-    
 
     // If no argument given, do all tests
     if (argc == 1) {
@@ -156,7 +147,7 @@ int main(int argc, char *argv[])
 
     // Write ending message and exit
     cout << "Ending RM component test.\n\n";
-    
+
     return (0);
 }
 
@@ -166,8 +157,6 @@ int main(int argc, char *argv[])
 // Desc: Print an error message by calling the proper component-specific
 //       print-error function
 //
-
-
 void PrintError(RC rc)
 {
     if (abs(rc) <= END_PF_WARN)
@@ -496,14 +485,8 @@ RC Test2(void)
 
     if ((rc = CreateFile(FILENAME, sizeof(TestRec))) ||
         (rc = OpenFile(FILENAME, fh)) ||
-        (rc = AddRecs(fh, FEW_RECS)))
-        return (rc);
-
-
-    if(VerifyFile(fh, FEW_RECS))
-        return (rc);
-
-    if ((rc = CloseFile(FILENAME, fh)))
+        (rc = AddRecs(fh, FEW_RECS)) ||
+        (rc = CloseFile(FILENAME, fh)))
         return (rc);
 
     LsFile(FILENAME);
@@ -514,130 +497,3 @@ RC Test2(void)
     printf("\ntest2 done ********************\n");
     return (0);
 }
-
-
-RC Test3(void){
-   RC rc;
-   RM_FileHandle fh1;
-   RM_FileHandle fh2;
-   RM_FileHandle fh3;
-
-   printf("test3 starting ****************\n");
-    // OK
-   printf("\n*** File Creation Test with negative rec size: %s\n", 
-         (CreateFile(FILENAME, -1)) ? "PASS\a" : "FAIL"); 
-   printf("\n*** File Creation Test with too big of rec size: %s\n", 
-         (CreateFile(FILENAME, PF_PAGE_SIZE)) ? "PASS\a" : "FAIL");
-   printf("\n*** Opening a non-created file: %s\n", 
-         (OpenFile(FILENAME, fh1)) ? "PASS\a" : "FAIL");  
-
-   printf("\n*** File Creation Test: %s\n", 
-         (CreateFile(FILENAME, sizeof(TestRec))) ? "FAIL\a" : "PASS"); 
-
-   printf("\n*** Opening a created file: %s\n", 
-         (OpenFile(FILENAME, fh1)) ? "FAIL\a" : "PASS"); 
-   printf("\n*** Opening a created file twice: %s\n", 
-         (OpenFile(FILENAME, fh2)) ? "FAIL\a" : "PASS"); 
-
-   printf("\n*** Closing a FH that wasn't opened: %s\n", 
-         (CloseFile(FILENAME, fh3)) ? "PASS\a" : "FAIL"); 
-
-   printf("\n*** Closing a FH: %s\n", 
-         (CloseFile(FILENAME, fh2)) ? "FAIL\a" : "PASS"); 
-
-   printf("\n*** Closing a FH twice: %s\n", 
-         (CloseFile(FILENAME, fh2)) ? "PASS\a" : "FAIL"); 
-
-   printf("\n*** Destroying a file that is open: %s\n", 
-         (DestroyFile(FILENAME)) ? "FAIL\a" : "PASS"); 
-
-   printf("\n*** Closing a file that is not there: %s\n", 
-         (CloseFile("helloworld", fh2)) ? "PASS\a" : "FAIL"); 
-   printf("\n*** Destroy a file that is not there: %s\n", 
-         (DestroyFile("helloworld")) ? "PASS\a" : "FAIL"); 
-
-   printf("\n*** Creating another file: %s\n", 
-         (CreateFile("helloworld", sizeof(TestRec))) ? "FAIL\a" : "PASS"); 
-
-   printf("\n*** Closing a file that's not opened: %s\n", 
-         (CloseFile("helloworld", fh2)) ? "PASS\a" : "FAIL"); 
-
-
-
-   printf("\n*** Destroying files: %s\n", 
-         (DestroyFile("helloworld")) ? "FAIL\a" : "PASS"); 
-
-
-   printf("\ntest2 done ********************\n");
-   return (0);
-}
-
-RC Test4(void){
-    RC rc;
-    RM_FileHandle fh;
-    RM_FileHandle fh2;
-    RM_Record rec;
-    RID rid;
-    printf("\n*** File Creation Test: %s\n", 
-         (CreateFile(FILENAME, sizeof(TestRec))) ? "FAIL\a" : "PASS"); 
-    printf("\n*** File Open Test: %s\n", 
-         (OpenFile(FILENAME, fh)) ? "FAIL\a" : "PASS");
-    // OK
-    printf("\n*** Add Records Test: %s\n", 
-         (AddRecs(fh, FEW_RECS)) ? "FAIL\a" : "PASS");
-
-    RM_FileScan fs;
-    rc=fs.OpenScan(fh2,INT,sizeof(int),offsetof(TestRec, num), 
-         NO_OP, NULL);
-    printf("\n*** Open a filescan from an invalid filehandle: %s\n", 
-         (rc) ? "PASS\a" : "FAIL");
-
-
-    if ((rc=fs.OpenScan(fh,INT,sizeof(int),offsetof(TestRec, num), 
-         NO_OP, NULL)))
-      return (rc);
-    int counter = 0;
-    for (rc = GetNextRecScan(fs, rec); 
-         rc == 0 && counter < 10; 
-         rc = GetNextRecScan(fs, rec), counter++) {
-
-      // Get the record id
-      if ((rc = rec.GetRid(rid)))
-         return (rc);
-      counter++;
-   }
-   printf("counter: %d \n", counter);
-   if ((rc = fs.CloseScan()))
-      return(rc);
-
-   if ((rc=fs.OpenScan(fh,INT,sizeof(int),offsetof(TestRec, num), 
-         NO_OP, NULL)))
-      return (rc);
-    counter = 0;
-    for (rc = GetNextRecScan(fs, rec); 
-         rc == 0 && counter < FEW_RECS; 
-         rc = GetNextRecScan(fs, rec), counter++) {
-
-      // Get the record id
-      if ((rc = rec.GetRid(rid)))
-         return (rc);
-      counter++;
-   }
-   printf("counter: %d \n", counter);
-   if ((rc = fs.CloseScan()))
-      return(rc);
-
-   printf("\n*** Closing a filescan early and reusing it: %s\n", 
-         (counter == FEW_RECS) ? "PASS\a" : "FAIL");
-
-   printf("\n*** Closing a filescan that isn't open: %s\n", 
-         (fs.CloseScan()) ? "PASS\a" : "FAIL");
-
-    
-    printf("\n*** Destroying a file: %s\n", 
-         (DestroyFile(FILENAME)) ? "FAIL\a" : "PASS"); 
-
-    return (0);
-
-}
-

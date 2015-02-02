@@ -23,8 +23,8 @@
 
 #include "redbase.h"
 #include "pf.h"
+#include "rm_rid.h"
 #include "rm_internal.h"
-#include "rm.h"
 
 using namespace std;
 
@@ -59,14 +59,14 @@ struct TestRec {
 PF_Manager pfm;
 RM_Manager rmm(pfm);
 
-
 //
 // Function declarations
 //
 RC Test1(void);
 RC Test2(void);
-RC Test3(void);
-RC Test4(void);
+RC TestRID(void);
+RC TestRecord(void);
+RC TestBitmap(void);
 
 void PrintError(RC rc);
 void LsFile(char *fileName);
@@ -87,13 +87,14 @@ RC GetNextRecScan(RM_FileScan &fs, RM_Record &rec);
 //
 // Array of pointers to the test functions
 //
-#define NUM_TESTS       4               // number of tests
+#define NUM_TESTS       5               // number of tests
 int (*tests[])() =                      // RC doesn't work on some compilers
 {
     Test1,
     Test2,
-    Test3,
-    Test4
+    TestRID,
+    TestRecord,
+    TestBitmap
 };
 
 //
@@ -111,11 +112,8 @@ int main(int argc, char *argv[])
     cout << "Starting RM component test.\n";
     cout.flush();
 
-
     // Delete files from last time
     unlink(FILENAME);
-
-    
 
     // If no argument given, do all tests
     if (argc == 1) {
@@ -156,7 +154,7 @@ int main(int argc, char *argv[])
 
     // Write ending message and exit
     cout << "Ending RM component test.\n\n";
-    
+
     return (0);
 }
 
@@ -166,8 +164,6 @@ int main(int argc, char *argv[])
 // Desc: Print an error message by calling the proper component-specific
 //       print-error function
 //
-
-
 void PrintError(RC rc)
 {
     if (abs(rc) <= END_PF_WARN)
@@ -496,14 +492,8 @@ RC Test2(void)
 
     if ((rc = CreateFile(FILENAME, sizeof(TestRec))) ||
         (rc = OpenFile(FILENAME, fh)) ||
-        (rc = AddRecs(fh, FEW_RECS)))
-        return (rc);
-
-
-    if(VerifyFile(fh, FEW_RECS))
-        return (rc);
-
-    if ((rc = CloseFile(FILENAME, fh)))
+        (rc = AddRecs(fh, FEW_RECS)) ||
+        (rc = CloseFile(FILENAME, fh)))
         return (rc);
 
     LsFile(FILENAME);
@@ -515,129 +505,125 @@ RC Test2(void)
     return (0);
 }
 
-
-RC Test3(void){
-   RC rc;
-   RM_FileHandle fh1;
-   RM_FileHandle fh2;
-   RM_FileHandle fh3;
-
-   printf("test3 starting ****************\n");
-    // OK
-   printf("\n*** File Creation Test with negative rec size: %s\n", 
-         (CreateFile(FILENAME, -1)) ? "PASS\a" : "FAIL"); 
-   printf("\n*** File Creation Test with too big of rec size: %s\n", 
-         (CreateFile(FILENAME, PF_PAGE_SIZE)) ? "PASS\a" : "FAIL");
-   printf("\n*** Opening a non-created file: %s\n", 
-         (OpenFile(FILENAME, fh1)) ? "PASS\a" : "FAIL");  
-
-   printf("\n*** File Creation Test: %s\n", 
-         (CreateFile(FILENAME, sizeof(TestRec))) ? "FAIL\a" : "PASS"); 
-
-   printf("\n*** Opening a created file: %s\n", 
-         (OpenFile(FILENAME, fh1)) ? "FAIL\a" : "PASS"); 
-   printf("\n*** Opening a created file twice: %s\n", 
-         (OpenFile(FILENAME, fh2)) ? "FAIL\a" : "PASS"); 
-
-   printf("\n*** Closing a FH that wasn't opened: %s\n", 
-         (CloseFile(FILENAME, fh3)) ? "PASS\a" : "FAIL"); 
-
-   printf("\n*** Closing a FH: %s\n", 
-         (CloseFile(FILENAME, fh2)) ? "FAIL\a" : "PASS"); 
-
-   printf("\n*** Closing a FH twice: %s\n", 
-         (CloseFile(FILENAME, fh2)) ? "PASS\a" : "FAIL"); 
-
-   printf("\n*** Destroying a file that is open: %s\n", 
-         (DestroyFile(FILENAME)) ? "FAIL\a" : "PASS"); 
-
-   printf("\n*** Closing a file that is not there: %s\n", 
-         (CloseFile("helloworld", fh2)) ? "PASS\a" : "FAIL"); 
-   printf("\n*** Destroy a file that is not there: %s\n", 
-         (DestroyFile("helloworld")) ? "PASS\a" : "FAIL"); 
-
-   printf("\n*** Creating another file: %s\n", 
-         (CreateFile("helloworld", sizeof(TestRec))) ? "FAIL\a" : "PASS"); 
-
-   printf("\n*** Closing a file that's not opened: %s\n", 
-         (CloseFile("helloworld", fh2)) ? "PASS\a" : "FAIL"); 
-
-
-
-   printf("\n*** Destroying files: %s\n", 
-         (DestroyFile("helloworld")) ? "FAIL\a" : "PASS"); 
-
-
-   printf("\ntest2 done ********************\n");
-   return (0);
-}
-
-RC Test4(void){
+RC TestRID(void)
+{
     RC rc;
-    RM_FileHandle fh;
-    RM_FileHandle fh2;
-    RM_Record rec;
-    RID rid;
-    printf("\n*** File Creation Test: %s\n", 
-         (CreateFile(FILENAME, sizeof(TestRec))) ? "FAIL\a" : "PASS"); 
-    printf("\n*** File Open Test: %s\n", 
-         (OpenFile(FILENAME, fh)) ? "FAIL\a" : "PASS");
-    // OK
-    printf("\n*** Add Records Test: %s\n", 
-         (AddRecs(fh, FEW_RECS)) ? "FAIL\a" : "PASS");
+    printf("RID test starting ********** \n");
+    RID rid2;
+    PageNum page;
+    SlotNum slot;
+    if(rid2.GetPageNum(page) == 0) {
+        return (1);
+        printf("RID did not return error code \n");
+    }
+    rid2 = RID(1,2);
+    if(rc = rid2.GetPageNum(page)) return (rc);
+    if(rc = rid2.GetSlotNum(slot)) return (rc);
 
-    RM_FileScan fs;
-    rc=fs.OpenScan(fh2,INT,sizeof(int),offsetof(TestRec, num), 
-         NO_OP, NULL);
-    printf("\n*** Open a filescan from an invalid filehandle: %s\n", 
-         (rc) ? "PASS\a" : "FAIL");
-
-
-    if ((rc=fs.OpenScan(fh,INT,sizeof(int),offsetof(TestRec, num), 
-         NO_OP, NULL)))
-      return (rc);
-    int counter = 0;
-    for (rc = GetNextRecScan(fs, rec); 
-         rc == 0 && counter < 10; 
-         rc = GetNextRecScan(fs, rec), counter++) {
-
-      // Get the record id
-      if ((rc = rec.GetRid(rid)))
-         return (rc);
-      counter++;
-   }
-   printf("counter: %d \n", counter);
-   if ((rc = fs.CloseScan()))
-      return(rc);
-
-   if ((rc=fs.OpenScan(fh,INT,sizeof(int),offsetof(TestRec, num), 
-         NO_OP, NULL)))
-      return (rc);
-    counter = 0;
-    for (rc = GetNextRecScan(fs, rec); 
-         rc == 0 && counter < FEW_RECS; 
-         rc = GetNextRecScan(fs, rec), counter++) {
-
-      // Get the record id
-      if ((rc = rec.GetRid(rid)))
-         return (rc);
-      counter++;
-   }
-   printf("counter: %d \n", counter);
-   if ((rc = fs.CloseScan()))
-      return(rc);
-
-   printf("\n*** Closing a filescan early and reusing it: %s\n", 
-         (counter == FEW_RECS) ? "PASS\a" : "FAIL");
-
-   printf("\n*** Closing a filescan that isn't open: %s\n", 
-         (fs.CloseScan()) ? "PASS\a" : "FAIL");
-
-    
-    printf("\n*** Destroying a file: %s\n", 
-         (DestroyFile(FILENAME)) ? "FAIL\a" : "PASS"); 
-
+    printf("RID test done *********** \n");
+    if(page != 1 || slot != 2){
+        return (1);
+    }
     return (0);
 
 }
 
+RC TestRecord(void){
+    RC rc;
+    printf("Record test starting ***** \n");
+    RM_Record rec;
+    char data[3] = {'a','b','c'};
+    RID rid(1,2);
+    if (rc = rec.SetRecord(rid, data, 3)){
+        printf("Error in setting data");
+        return (1);
+    }
+
+    RID rid2;
+    rec.GetRid(rid2);
+    PageNum page;
+    SlotNum slot;
+    if(rc = rid2.GetPageNum(page)) return (rc);
+    if(rc = rid2.GetSlotNum(slot)) return (rc);
+    if(page != 1 || slot != 2){
+        printf("Error in retrieving RID \n");
+        return (1);
+    }
+    printf("%d %d \n", page, slot);
+
+    char * retrieved;
+    rec.GetData(retrieved);
+    if(retrieved[0] != 'a' || retrieved[1] != 'b' || retrieved[2] != 'c'){
+        printf("Error in retrieving data\n");
+        return (1);
+    }
+
+    printf("Record test done ***** \n");
+
+    return (0);
+}
+
+
+RC TestBitmap(void){
+  RC rc;
+  PF_FileHandle fh;
+  PF_PageHandle ph1;
+  PF_PageHandle ph2;
+  PF_PageHandle ph3;
+  PF_Manager pfm;
+  PageNum page;
+  PageNum page2;
+  PageNum page3;
+
+  if (rc = pfm.OpenFile("file1", fh))
+    printf("Error \n");
+
+  if(rc = fh.AllocatePage(ph1))
+    printf("Error 1 \n");
+  if(rc = ph1.GetPageNum(page))
+    printf("Error 2 \n");
+  printf("page 1: %d \n", page);
+
+  if(rc = fh.AllocatePage(ph2))
+    printf("Error 3 \n");
+  if(rc = ph2.GetPageNum(page2))
+    printf("Error 4 \n");
+  printf("page 2: %d \n", page2);
+  fh.UnpinPage(page);
+
+  //fh.DisposePage(page);
+  if (rc = fh.DisposePage(page))
+    printf("Error in disposal \n");
+
+  PF_PageHandle ph4;
+  PageNum page4;
+  if (rc = fh.GetThisPage(page, ph4))
+    PF_PrintError(rc);
+  if( rc = ph4.GetPageNum(page4))
+    PF_PrintError(rc);
+  printf("page 4: %d \n", page4);
+
+  fh.AllocatePage(ph3);
+  ph3.GetPageNum(page3);
+  printf("page 3: %d \n", page3);
+
+  PF_PageHandle ph5;
+  PageNum page5;
+  if (rc = fh.GetThisPage(page2, ph5))
+    printf("Error 7 \n");
+  if( rc = ph5.GetPageNum(page5))
+    printf("Error 8 \n");
+  printf("page 4: %d \n", page5);
+
+  PF_PageHandle ph6;
+  PageNum page6;
+  if(rc = fh.GetNextPage(80, ph6))
+    printf("Error 9 \n");
+  if( rc = ph6.GetPageNum(page6))
+    printf("Error 10 \n");
+  printf("page 6: %d \n", page6);
+  
+
+  return (0);
+
+}
