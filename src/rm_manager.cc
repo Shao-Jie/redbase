@@ -23,11 +23,21 @@ RM_Manager::~RM_Manager(){
  */
 RC RM_Manager::CreateFile (const char *fileName, int recordSize) { 
   RC rc = 0;
+  if(fileName == NULL)
+    return (RM_BADFILENAME);
   // basic checks on record size
   if(recordSize <= 0 || recordSize > PF_PAGE_SIZE)
     return RM_BADRECORDSIZE;
 
+  int numRecordsPerPage = RM_FileHandle::CalcNumRecPerPage(recordSize);
+  int bitmapSize = RM_FileHandle::NumBitsToCharSize(numRecordsPerPage);
+  int bitmapOffset = sizeof(struct RM_PageHeader);
+
+  if( (PF_PAGE_SIZE - bitmapSize - bitmapOffset)/recordSize <= 0)
+    return RM_BADRECORDSIZE;
+
   // Sets up the file header
+  /*
   struct RM_FileHeader header;
   header.recordSize = recordSize;
   header.numRecordsPerPage = RM_FileHandle::CalcNumRecPerPage(recordSize);
@@ -41,6 +51,7 @@ RC RM_Manager::CreateFile (const char *fileName, int recordSize) {
   if(numRecordsPerPage <= 0)
     return RM_BADRECORDSIZE;
   header.numRecordsPerPage = numRecordsPerPage;
+  */
 
   // Creates the file
   if((rc = pfm.CreateFile(fileName)))
@@ -49,6 +60,7 @@ RC RM_Manager::CreateFile (const char *fileName, int recordSize) {
   // Opens the file, creates a new page and copies the header into it
   PF_PageHandle ph;
   PF_FileHandle fh;
+  struct RM_FileHeader *header;
   if((rc = pfm.OpenFile(fileName, fh)))
     return (rc);
   PageNum page;
@@ -58,7 +70,14 @@ RC RM_Manager::CreateFile (const char *fileName, int recordSize) {
   if((rc = ph.GetData(pData))){
     goto cleanup_and_exit;
   }
-  memcpy(pData, &header, sizeof(struct RM_FileHeader));
+  header = (struct RM_FileHeader *) pData;
+  header->recordSize = recordSize;
+  header->numRecordsPerPage = (PF_PAGE_SIZE - bitmapSize - bitmapOffset)/recordSize;
+  header->bitmapSize = bitmapSize;
+  header->bitmapOffset = bitmapOffset;
+  header->numPages = 1;
+  header->firstFreePage = NO_MORE_FREE_PAGES;
+  //memcpy(pData, &header, sizeof(struct RM_FileHeader));
 
   // always unpin the page, and close the file before exiting
   cleanup_and_exit:
@@ -72,6 +91,8 @@ RC RM_Manager::CreateFile (const char *fileName, int recordSize) {
  * Destroys a file
  */
 RC RM_Manager::DestroyFile(const char *fileName) {
+  if(fileName == NULL)
+    return (RM_BADFILENAME);
   RC rc;
   if((rc = pfm.DestroyFile(fileName)))
     return (rc);
@@ -103,6 +124,8 @@ RC RM_Manager::SetUpFH(RM_FileHandle& fileHandle, PF_FileHandle &fh, struct RM_F
  * given FileHandle must not already be associated with another open file
  */
 RC RM_Manager::OpenFile   (const char *fileName, RM_FileHandle &fileHandle){
+  if(fileName == NULL)
+    return (RM_BADFILENAME);
   // if the filehandle is associated with another open file. exit immediately
   if(fileHandle.openedFH == true)
     return (RM_INVALIDFILEHANDLE);
